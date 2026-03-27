@@ -88,7 +88,7 @@ Example structure:
 """
 
 
-def run_agent(user_message: str, conversation_history: list, category_filter: str = None) -> tuple[str, list]:
+def run_agent(user_message: str, conversation_history: list, category_filter: str = None) -> tuple[str, list, list]:
     """
     Process a user message through the LLM router agent.
 
@@ -98,7 +98,8 @@ def run_agent(user_message: str, conversation_history: list, category_filter: st
         category_filter: Optional active category filter from the UI sidebar
 
     Returns:
-        Tuple of (assistant_response_text, updated_conversation_history)
+        Tuple of (assistant_response_text, updated_conversation_history, tool_results)
+        tool_results is a list of {"tool_name": str, "result": dict|list} for UI rendering
     """
     client = get_llm_client()
 
@@ -114,6 +115,8 @@ def run_agent(user_message: str, conversation_history: list, category_filter: st
     messages = [{"role": "system", "content": system_content}]
     messages.extend(conversation_history)
     messages.append({"role": "user", "content": user_message})
+
+    tool_results = []  # Collect tool call results for UI component rendering
 
     # Call the LLM with tool schemas — the LLM acts as the router by choosing
     # which tool(s) to call based on the user's intent
@@ -132,7 +135,7 @@ def run_agent(user_message: str, conversation_history: list, category_filter: st
         updated_history = conversation_history.copy()
         updated_history.append({"role": "user", "content": user_message})
         updated_history.append({"role": "assistant", "content": error_msg})
-        return error_msg, updated_history
+        return error_msg, updated_history, []
 
     assistant_message = response.choices[0].message
 
@@ -151,6 +154,9 @@ def run_agent(user_message: str, conversation_history: list, category_filter: st
                 result = TOOL_FUNCTIONS[fn_name](**fn_args)
             else:
                 result = {"error": f"Unknown tool: {fn_name}"}
+
+            # Capture raw result for UI component rendering
+            tool_results.append({"tool_name": fn_name, "result": result})
 
             # Add tool result to messages
             messages.append({
@@ -177,7 +183,7 @@ def run_agent(user_message: str, conversation_history: list, category_filter: st
             updated_history = conversation_history.copy()
             updated_history.append({"role": "user", "content": user_message})
             updated_history.append({"role": "assistant", "content": response_text})
-            return response_text, updated_history
+            return response_text, updated_history, tool_results
 
     # Extract the final text response
     response_text = assistant_message.content or "I couldn't generate a response. Please try again."
@@ -187,7 +193,7 @@ def run_agent(user_message: str, conversation_history: list, category_filter: st
     updated_history.append({"role": "user", "content": user_message})
     updated_history.append({"role": "assistant", "content": response_text})
 
-    return response_text, updated_history
+    return response_text, updated_history, tool_results
 
 
 # =============================================================================

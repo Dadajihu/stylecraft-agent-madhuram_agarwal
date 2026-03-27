@@ -660,7 +660,9 @@ def render_daily_briefing(data: dict):
 if st.session_state.briefing_data:
     render_daily_briefing(st.session_state.briefing_data)
 
-# --- Helper to render a chat label ---
+# =============================================================================
+# Chat Response Component Renderers
+# =============================================================================
 def _chat_label(role: str):
     """Render a styled text label (RetailMind / User) at the top of a chat message."""
     if role == "assistant":
@@ -674,10 +676,291 @@ def _chat_label(role: str):
             unsafe_allow_html=True,
         )
 
+
+def _render_inventory_component(data: dict):
+    """Render an inventory health card for a single product."""
+    status = data.get("status", "Healthy")
+    colors = {"Critical": "#ff4444", "Low": "#ff8c00", "Healthy": "#10a37f"}
+    color = colors.get(status, "#10a37f")
+    days = data.get("days_to_stockout", "N/A")
+
+    st.markdown(f"""
+    <div style="background: #2a2a2a; border-left: 4px solid {color}; border-radius: 0 10px 10px 0;
+                padding: 16px 20px; margin: 8px 0 16px 0;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+                <div style="color: #ececec; font-weight: 600; font-size: 0.95rem; margin-bottom: 6px;">
+                    {data.get('product_name', '')}
+                    <span style="color: #555; font-size: 0.8rem; margin-left: 8px;">{data.get('product_id', '')}</span>
+                </div>
+                <div style="color: #999; font-size: 0.82rem;">
+                    <span style="color: #ccc; font-weight: 500;">{data.get('current_stock', 0)} units</span> remaining
+                    &nbsp;&middot;&nbsp; Sells ~{data.get('avg_daily_sales', 0)}/day
+                    &nbsp;&middot;&nbsp; <span style="color: {color}; font-weight: 600;">~{days} days</span> to stockout
+                </div>
+            </div>
+            <div>
+                <span style="background: {color}18; color: {color}; padding: 4px 14px; border-radius: 20px;
+                             font-weight: 600; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.5px;">
+                    {status}</span>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def _render_restock_component(data: list):
+    """Render stockout alert cards (same style as daily briefing)."""
+    if not data:
+        return
+    for item in data[:5]:
+        days = item.get("days_to_stockout", 0)
+        urgency_color = "#ff4444" if days < 1 else "#ff8c00" if days < 3 else "#ffd700"
+        rev = item.get("revenue_at_risk", 0)
+        rev_fmt = f"\u20b9{rev:,.0f}" if isinstance(rev, (int, float)) else str(rev)
+        st.markdown(f"""
+        <div style="background: #2a2a2a; border-left: 4px solid {urgency_color}; border-radius: 0 10px 10px 0;
+                    padding: 14px 18px; margin-bottom: 8px; display: flex; justify-content: space-between;
+                    align-items: center;">
+            <div>
+                <div style="color: #ececec; font-weight: 600; font-size: 0.92rem; margin-bottom: 4px;">
+                    {item.get('product_name', '')}
+                    <span style="color: #555; font-size: 0.78rem; margin-left: 8px;">{item.get('product_id', '')}</span>
+                </div>
+                <div style="color: #999; font-size: 0.8rem;">
+                    <span style="color: #ccc; font-weight: 500;">{item.get('stock_quantity', 0)} units</span> left
+                    &nbsp;&middot;&nbsp; ~<span style="color: {urgency_color}; font-weight: 600;">{days} days</span>
+                </div>
+            </div>
+            <div style="text-align: right; min-width: 100px;">
+                <div style="color: {urgency_color}; font-weight: 700; font-size: 1.05rem;">{rev_fmt}</div>
+                <div style="color: #666; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.5px;">
+                    revenue at risk</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    st.markdown("<div style='margin-bottom: 12px;'></div>", unsafe_allow_html=True)
+
+
+def _render_pricing_component(data: dict):
+    """Render a pricing analysis card."""
+    if data.get("type") == "catalog_overview":
+        low = data.get("lowest_margin_product", {})
+        high = data.get("highest_margin_product", {})
+        avg = data.get("avg_margin_pct", 0)
+        st.markdown(f"""
+        <div style="background: #2a2a2a; border-radius: 12px; padding: 18px 22px; margin: 8px 0 16px 0;
+                    border: 1px solid #333;">
+            <div style="color: #8e8e8e; font-size: 0.7rem; font-weight: 600; text-transform: uppercase;
+                        letter-spacing: 1px; margin-bottom: 14px;">PRICING OVERVIEW</div>
+            <div style="display: flex; gap: 24px; margin-bottom: 14px;">
+                <div>
+                    <div style="color: #666; font-size: 0.75rem;">Avg Margin</div>
+                    <div style="color: #ececec; font-size: 1.4rem; font-weight: 700;">{avg}%</div>
+                </div>
+                <div>
+                    <div style="color: #666; font-size: 0.75rem;">Highest</div>
+                    <div style="color: #10a37f; font-size: 1.1rem; font-weight: 600;">{high.get('gross_margin_pct', 0)}%</div>
+                    <div style="color: #888; font-size: 0.78rem;">{high.get('product_name', '')}</div>
+                </div>
+                <div>
+                    <div style="color: #666; font-size: 0.75rem;">Lowest</div>
+                    <div style="color: #ff6b6b; font-size: 1.1rem; font-weight: 600;">{low.get('gross_margin_pct', 0)}%</div>
+                    <div style="color: #888; font-size: 0.78rem;">{low.get('product_name', '')}</div>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        margin = data.get("gross_margin_pct", 0)
+        is_low = data.get("low_margin_flag", False)
+        color = "#ff6b6b" if is_low else "#10a37f"
+        price = data.get("price", 0)
+        cost = data.get("cost", 0)
+        price_fmt = f"\u20b9{price:,.0f}" if isinstance(price, (int, float)) else str(price)
+        cost_fmt = f"\u20b9{cost:,.0f}" if isinstance(cost, (int, float)) else str(cost)
+        st.markdown(f"""
+        <div style="background: #2a2a2a; border-left: 4px solid {color}; border-radius: 0 10px 10px 0;
+                    padding: 16px 20px; margin: 8px 0 16px 0;">
+            <div style="color: #ececec; font-weight: 600; font-size: 0.95rem; margin-bottom: 6px;">
+                {data.get('product_name', '')}
+                <span style="color: #555; font-size: 0.8rem; margin-left: 8px;">{data.get('product_id', '')}</span>
+            </div>
+            <div style="display: flex; gap: 20px; align-items: baseline; margin-bottom: 8px;">
+                <div>
+                    <span style="color: {color}; font-size: 1.6rem; font-weight: 700;">{margin}%</span>
+                    <span style="color: #666; font-size: 0.82rem;"> margin</span>
+                </div>
+                <div style="color: #999; font-size: 0.82rem;">
+                    {price_fmt} price &nbsp;&middot;&nbsp; {cost_fmt} cost
+                    &nbsp;&middot;&nbsp; <span style="color: #ccc; font-weight: 500;">{data.get('price_positioning', '')}</span>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+
+def _render_review_component(data: dict):
+    """Render a review insights card with rating, summary, and themes."""
+    rating = data.get("avg_rating", 0)
+    rating_color = "#ff4444" if rating < 3 else "#ffa500" if rating < 4 else "#10a37f"
+
+    pos_themes = data.get("positive_themes", [])
+    neg_themes = data.get("negative_themes", [])
+    pos_html = " ".join(
+        f'<span style="background: #10a37f18; color: #10a37f; padding: 3px 10px; border-radius: 12px; '
+        f'font-size: 0.78rem; margin-right: 6px;">{t}</span>' for t in pos_themes
+    )
+    neg_html = " ".join(
+        f'<span style="background: #ff6b6b18; color: #ff6b6b; padding: 3px 10px; border-radius: 12px; '
+        f'font-size: 0.78rem; margin-right: 6px;">{t}</span>' for t in neg_themes
+    )
+
+    st.markdown(f"""
+    <div style="background: #2a2a2a; border-radius: 12px; padding: 18px 22px; margin: 8px 0 16px 0;
+                border: 1px solid #333;">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px;">
+            <div>
+                <div style="color: #ececec; font-weight: 600; font-size: 0.95rem; margin-bottom: 4px;">
+                    {data.get('product_name', '')}</div>
+                <div style="color: #666; font-size: 0.8rem;">{data.get('product_id', '')} &middot; {data.get('total_reviews', 0)} reviews</div>
+            </div>
+            <div style="text-align: right;">
+                <span style="color: {rating_color}; font-size: 1.8rem; font-weight: 700;">{rating}</span>
+                <span style="color: #666; font-size: 0.85rem;"> / 5.0</span>
+            </div>
+        </div>
+        <div style="color: #aaa; font-size: 0.85rem; font-style: italic; border-left: 3px solid {rating_color};
+                    padding: 8px 12px; margin-bottom: 14px; background: {rating_color}08; border-radius: 0 6px 6px 0;">
+            {data.get('summary', '')}</div>
+        <div style="margin-bottom: 6px;">
+            <span style="color: #666; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.5px;">Positive: </span>
+            {pos_html}
+        </div>
+        <div>
+            <span style="color: #666; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.5px;">Negative: </span>
+            {neg_html}
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def _render_category_component(data: dict):
+    """Render a category performance card with stats and top products."""
+    critical = data.get("critical_stock_items", 0)
+    low = data.get("low_stock_items", 0)
+    risk_color = "#ff4444" if critical > 0 else "#10a37f"
+
+    top3 = data.get("top_3_revenue_products", [])
+    top3_html = ""
+    for i, p in enumerate(top3, 1):
+        rev = p.get("estimated_daily_revenue", 0)
+        rev_fmt = f"\u20b9{rev:,.0f}" if isinstance(rev, (int, float)) else str(rev)
+        border = "border-bottom: 1px solid #333;" if i < len(top3) else ""
+        top3_html += (
+            f'<div style="display: flex; justify-content: space-between; padding: 6px 0; {border}">'
+            f'<span style="color: #ccc; font-size: 0.82rem;">{i}. {p.get("product_name", "")}</span>'
+            f'<span style="color: #10a37f; font-size: 0.82rem; font-weight: 600;">{rev_fmt}/day</span>'
+            f'</div>'
+        )
+
+    stock_total = data.get("total_stock_units", 0)
+    stock_fmt = f"{stock_total:,}" if isinstance(stock_total, (int, float)) else str(stock_total)
+
+    st.markdown(f"""
+    <div style="background: #2a2a2a; border-radius: 12px; padding: 18px 22px; margin: 8px 0 16px 0;
+                border: 1px solid #333;">
+        <div style="color: #ececec; font-weight: 700; font-size: 1.05rem; margin-bottom: 14px;">
+            {data.get('category', '')}
+            <span style="color: #555; font-size: 0.82rem; font-weight: 400; margin-left: 8px;">
+                {data.get('total_skus', 0)} SKUs</span>
+        </div>
+        <div style="display: flex; gap: 16px; margin-bottom: 16px;">
+            <div style="flex: 1; background: #212121; border-radius: 8px; padding: 10px 14px; text-align: center;">
+                <div style="color: #666; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.5px;">Rating</div>
+                <div style="color: #ececec; font-size: 1.2rem; font-weight: 700;">{data.get('avg_rating', 0)}</div>
+            </div>
+            <div style="flex: 1; background: #212121; border-radius: 8px; padding: 10px 14px; text-align: center;">
+                <div style="color: #666; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.5px;">Margin</div>
+                <div style="color: #ececec; font-size: 1.2rem; font-weight: 700;">{data.get('avg_margin_pct', 0)}%</div>
+            </div>
+            <div style="flex: 1; background: #212121; border-radius: 8px; padding: 10px 14px; text-align: center;">
+                <div style="color: #666; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.5px;">Stock</div>
+                <div style="color: #ececec; font-size: 1.2rem; font-weight: 700;">{stock_fmt}</div>
+            </div>
+            <div style="flex: 1; background: #212121; border-radius: 8px; padding: 10px 14px; text-align: center;">
+                <div style="color: #666; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.5px;">At Risk</div>
+                <div style="color: {risk_color}; font-size: 1.2rem; font-weight: 700;">{critical + low}</div>
+            </div>
+        </div>
+        <div style="color: #8e8e8e; font-size: 0.7rem; font-weight: 600; text-transform: uppercase;
+                    letter-spacing: 1px; margin-bottom: 8px;">TOP REVENUE PRODUCTS</div>
+        {top3_html}
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def _render_search_component(data: list):
+    """Render search results as compact product cards."""
+    if not data:
+        return
+    for item in data:
+        rating = item.get("avg_rating", 0)
+        rating_color = "#ff4444" if rating < 3 else "#ffa500" if rating < 4 else "#10a37f"
+        price = item.get("price", 0)
+        price_fmt = f"\u20b9{price:,.0f}" if isinstance(price, (int, float)) else str(price)
+        st.markdown(f"""
+        <div style="background: #2a2a2a; border-radius: 10px; padding: 14px 18px; margin-bottom: 8px;
+                    border: 1px solid #333; display: flex; justify-content: space-between; align-items: center;">
+            <div>
+                <div style="color: #ececec; font-weight: 600; font-size: 0.92rem;">
+                    {item.get('product_name', '')}
+                    <span style="color: #555; font-size: 0.78rem; margin-left: 8px;">{item.get('product_id', '')}</span>
+                </div>
+                <div style="color: #888; font-size: 0.8rem; margin-top: 4px;">
+                    {item.get('category', '')} &nbsp;&middot;&nbsp; {price_fmt}
+                    &nbsp;&middot;&nbsp; {item.get('stock_quantity', 0)} in stock
+                </div>
+            </div>
+            <div>
+                <span style="color: {rating_color}; font-size: 1.1rem; font-weight: 700;">{rating}</span>
+                <span style="color: #666; font-size: 0.75rem;"> / 5</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    st.markdown("<div style='margin-bottom: 12px;'></div>", unsafe_allow_html=True)
+
+
+def render_tool_components(tool_results: list):
+    """Dispatch tool results to the appropriate component renderer."""
+    if not tool_results:
+        return
+    for tr in tool_results:
+        name = tr["tool_name"]
+        result = tr["result"]
+        # Skip error results
+        if isinstance(result, dict) and "error" in result:
+            continue
+        if name == "get_inventory_health":
+            _render_inventory_component(result)
+        elif name == "generate_restock_alert":
+            _render_restock_component(result)
+        elif name == "get_pricing_analysis":
+            _render_pricing_component(result)
+        elif name == "get_review_insights":
+            _render_review_component(result)
+        elif name == "get_category_performance":
+            _render_category_component(result)
+        elif name == "search_products":
+            _render_search_component(result)
+
+
 # --- Display Chat Messages ---
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         _chat_label(msg["role"])
+        if msg.get("tool_results"):
+            render_tool_components(msg["tool_results"])
         st.markdown(msg["content"])
 
 # --- Chat Input ---
@@ -690,12 +973,13 @@ if user_input := st.chat_input("Message RetailMind..."):
     with st.chat_message("assistant"):
         _chat_label("assistant")
         with st.spinner("Thinking..."):
-            response_text, updated_history = run_agent(
+            response_text, updated_history, tool_results = run_agent(
                 user_message=user_input,
                 conversation_history=st.session_state.conversation_history,
                 category_filter=category_filter,
             )
+            render_tool_components(tool_results)
             st.markdown(response_text)
 
-    st.session_state.messages.append({"role": "assistant", "content": response_text})
+    st.session_state.messages.append({"role": "assistant", "content": response_text, "tool_results": tool_results})
     st.session_state.conversation_history = updated_history
