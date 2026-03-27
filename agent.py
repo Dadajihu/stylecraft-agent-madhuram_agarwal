@@ -14,23 +14,14 @@ Routes:
 """
 
 import json
-from openai import OpenAI
 from config import (
-    OPENAI_API_KEY, API_BASE_URL, MODEL_NAME,
+    get_llm_client, MODEL_NAME,
     LLM_TEMPERATURE, LLM_TOP_P, LLM_MAX_TOKENS,
     SUMMARY_TEMPERATURE, SUMMARY_MAX_TOKENS,
     BRIEFING_MARGIN_THRESHOLD,
 )
 from tools import TOOL_SCHEMAS, TOOL_FUNCTIONS, generate_restock_alert
 from data_loader import get_products_df, get_reviews_df
-
-
-def _get_client():
-    """Create an OpenAI client."""
-    kwargs = {"api_key": OPENAI_API_KEY}
-    if API_BASE_URL:
-        kwargs["base_url"] = API_BASE_URL
-    return OpenAI(**kwargs)
 
 
 # =============================================================================
@@ -49,7 +40,8 @@ You have access to 6 specialized tools. Based on the user's intent, you MUST cal
    → Call `generate_restock_alert(threshold_days)` for a catalog-wide stockout scan
 
 2. **PRICING queries** (margins, pricing tiers, profitability, cost efficiency):
-   → Call `get_pricing_analysis(product_id)`
+   → Call `get_pricing_analysis(product_id)` for a specific product
+   → Call `get_pricing_analysis()` without product_id for catalog-wide pricing overview
    → Highlight low-margin items and suggest pricing actions if margin < 20%
 
 3. **REVIEW queries** (customer feedback, ratings, complaints, sentiment):
@@ -66,10 +58,33 @@ You have access to 6 specialized tools. Based on the user's intent, you MUST cal
 ## Important Guidelines
 - Always use tools when data is needed. Never make up numbers or product details.
 - When a user mentions a product by name (not ID), first use search_products to find the product ID, then call the relevant analysis tool.
-- Present data in a clear, structured format using bullet points or tables.
-- Add business-relevant insights and actionable recommendations.
 - Maintain conversation context for follow-up questions.
 - If a category filter is active, mention it in your response and scope your analysis accordingly.
+
+## Response Formatting Rules
+Format every response using rich markdown for readability:
+
+- **Start with a one-line summary** in bold that directly answers the question
+- Use **### Subheadings** to organize sections (e.g., ### Inventory Status, ### Recommendation)
+- Use **bold** for product names, key numbers, and status labels (e.g., **Critical**, **INR 2,999**)
+- Use bullet points (`-`) for listing multiple items or metrics
+- Use markdown tables when comparing 3+ products side by side
+- Use `>` blockquotes for actionable recommendations or key insights
+- Add a **### Recommendation** section at the end with 1-2 actionable business suggestions
+- Keep paragraphs short (2-3 sentences max)
+- Use line breaks between sections for visual breathing room
+
+Example structure:
+```
+**Direct answer to the question in one line.**
+
+### Section Heading
+- **Metric 1:** Value
+- **Metric 2:** Value
+
+### Recommendation
+> Actionable business insight here.
+```
 """
 
 
@@ -85,7 +100,7 @@ def run_agent(user_message: str, conversation_history: list, category_filter: st
     Returns:
         Tuple of (assistant_response_text, updated_conversation_history)
     """
-    client = _get_client()
+    client = get_llm_client()
 
     # Build the system prompt, optionally scoped by category filter
     system_content = SYSTEM_PROMPT
@@ -113,7 +128,7 @@ def run_agent(user_message: str, conversation_history: list, category_filter: st
             max_tokens=LLM_MAX_TOKENS,
         )
     except Exception as e:
-        error_msg = f"LLM API error: {e}"
+        error_msg = f"Sorry, I encountered an issue connecting to the AI service. Please try again. (Error: {e})"
         updated_history = conversation_history.copy()
         updated_history.append({"role": "user", "content": user_message})
         updated_history.append({"role": "assistant", "content": error_msg})
@@ -144,17 +159,25 @@ def run_agent(user_message: str, conversation_history: list, category_filter: st
                 "content": json.dumps(result, default=str),
             })
 
-        # Call the LLM again with tool results so it can generate a natural language response
-        response = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=messages,
-            tools=TOOL_SCHEMAS,
-            tool_choice="auto",
-            temperature=LLM_TEMPERATURE,
-            top_p=LLM_TOP_P,
-            max_tokens=LLM_MAX_TOKENS,
-        )
-        assistant_message = response.choices[0].message
+        # Call the LLM again with tool results to generate a natural language response
+        try:
+            response = client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=messages,
+                tools=TOOL_SCHEMAS,
+                tool_choice="auto",
+                temperature=LLM_TEMPERATURE,
+                top_p=LLM_TOP_P,
+                max_tokens=LLM_MAX_TOKENS,
+            )
+            assistant_message = response.choices[0].message
+        except Exception as e:
+            # If the follow-up LLM call fails, return a graceful error
+            response_text = f"I retrieved the data but couldn't generate a summary. Please try again. (Error: {e})"
+            updated_history = conversation_history.copy()
+            updated_history.append({"role": "user", "content": user_message})
+            updated_history.append({"role": "assistant", "content": response_text})
+            return response_text, updated_history
 
     # Extract the final text response
     response_text = assistant_message.content or "I couldn't generate a response. Please try again."
@@ -170,82 +193,96 @@ def run_agent(user_message: str, conversation_history: list, category_filter: st
 # =============================================================================
 # Daily Briefing Generator
 # =============================================================================
-def generate_daily_briefing() -> str:
+def _llm_summarize_complaints(product_name: str, review_texts: str) -> str:
+    """Use LLM to generate a one-line summary of why customers are unhappy."""
+    client = get_llm_client()
+    try:
+        response = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role": "system", "content": "You are a concise retail analyst. Answer in one sentence only."},
+                {"role": "user", "content": (
+                    f"Based on these negative reviews for '{product_name}', "
+                    f"write ONE sentence explaining why customers are unhappy:\n\n{review_texts}"
+                )},
+            ],
+            temperature=SUMMARY_TEMPERATURE,
+            max_tokens=100,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception:
+        return "Customer feedback indicates quality and delivery concerns."
+
+
+def generate_daily_briefing() -> dict:
     """
-    Generate a daily briefing that runs on app startup.
-    Includes:
-      1. Top 3 critically low-stock products with days-to-stockout and revenue at risk
-      2. Worst-rated product and a one-line summary of why customers are unhappy
-      3. One pricing flag — lowest gross margin product (if below 25%)
+    Generate structured daily briefing data for the UI to render.
+    Returns a dict with all data needed for rich Streamlit rendering.
     """
+    import pandas as pd
     df = get_products_df()
     reviews_df = get_reviews_df()
 
-    # --- 1. Top 3 Stockout Risks ---
+    # --- 1. Stockout Risks ---
     restock_alerts = generate_restock_alert(threshold_days=7)
     top3_alerts = restock_alerts[:3]
 
-    stockout_section = ""
-    if top3_alerts:
-        stockout_section = "### Stockout Alerts\n"
-        for i, item in enumerate(top3_alerts, 1):
-            stockout_section += (
-                f"{i}. **{item['product_name']}** ({item['product_id']}) — "
-                f"Only **{item['stock_quantity']} units** left, "
-                f"~**{item['days_to_stockout']} days** to stockout | "
-                f"Revenue at risk: **INR {item['revenue_at_risk']:,.0f}**\n"
-            )
-    else:
-        stockout_section = "### Stockout Alerts\nNo critical stockout risks today.\n"
-
-    # --- 2. Worst-Rated Product ---
+    # --- 2. Worst-Rated Product (with LLM summary) ---
     worst = df.loc[df["avg_rating"].idxmin()]
     worst_reviews = reviews_df[reviews_df["product_id"] == worst["product_id"]]
 
-    # Generate a one-line summary of why customers are unhappy
-    unhappy_reason = ""
     if not worst_reviews.empty:
         low_reviews = worst_reviews[worst_reviews["rating"] <= 3]
         if not low_reviews.empty:
-            complaints = "; ".join(low_reviews["review_title"].tolist()[:3])
-            unhappy_reason = f"Key complaints: {complaints}"
+            review_texts = "\n".join(
+                f"- {r['review_title']}: {r['review_text']}"
+                for _, r in low_reviews.iterrows()
+            )
+            unhappy_reason = _llm_summarize_complaints(worst["product_name"], review_texts)
         else:
-            unhappy_reason = "Mixed reviews with room for improvement"
+            unhappy_reason = "Mixed reviews with room for improvement."
     else:
-        unhappy_reason = "Limited review data available"
-
-    rating_section = (
-        f"### Worst-Rated Product\n"
-        f"**{worst['product_name']}** ({worst['product_id']}) — "
-        f"Rating: **{worst['avg_rating']}/5.0** | {unhappy_reason}\n"
-    )
+        unhappy_reason = "Limited review data available."
 
     # --- 3. Pricing Flag ---
     df_copy = df.copy()
-    df_copy["gross_margin"] = (df_copy["price"] - df_copy["cost"]) / df_copy["price"] * 100
+    df_copy["gross_margin"] = round((df_copy["price"] - df_copy["cost"]) / df_copy["price"] * 100, 1)
     lowest_margin = df_copy.loc[df_copy["gross_margin"].idxmin()]
     margin_val = round(lowest_margin["gross_margin"], 1)
 
-    if margin_val < BRIEFING_MARGIN_THRESHOLD:
-        pricing_section = (
-            f"### Pricing Flag\n"
-            f"**{lowest_margin['product_name']}** ({lowest_margin['product_id']}) has the lowest "
-            f"gross margin at **{margin_val}%**. Consider renegotiating supplier costs or "
-            f"adjusting the selling price to improve profitability.\n"
+    # --- 4. Category health data for chart ---
+    category_data = []
+    for cat in df["category"].unique():
+        cat_df = df_copy[df_copy["category"] == cat]
+        cat_stock = cat_df.copy()
+        cat_stock["days_to_stockout"] = cat_stock.apply(
+            lambda r: r["stock_quantity"] / r["avg_daily_sales"] if r["avg_daily_sales"] > 0 else float("inf"),
+            axis=1,
         )
-    else:
-        pricing_section = (
-            f"### Pricing Flag\n"
-            f"All products have margins above {BRIEFING_MARGIN_THRESHOLD}%. "
-            f"Lowest is **{lowest_margin['product_name']}** at {margin_val}%.\n"
-        )
+        critical = int((cat_stock["days_to_stockout"] < 7).sum())
+        category_data.append({
+            "Category": cat,
+            "SKUs": len(cat_df),
+            "Avg Rating": round(cat_df["avg_rating"].mean(), 1),
+            "Avg Margin %": round(cat_df["gross_margin"].mean(), 1),
+            "Total Stock": int(cat_df["stock_quantity"].sum()),
+            "At Risk": critical,
+        })
 
-    # Combine the briefing
-    briefing = (
-        f"## Daily Briefing — RetailMind Product Intelligence\n\n"
-        f"{stockout_section}\n"
-        f"{rating_section}\n"
-        f"{pricing_section}"
-    )
-
-    return briefing
+    return {
+        "stockout_alerts": top3_alerts,
+        "all_alerts_count": len(restock_alerts),
+        "worst_product": {
+            "name": worst["product_name"],
+            "id": worst["product_id"],
+            "rating": worst["avg_rating"],
+            "reason": unhappy_reason,
+        },
+        "pricing": {
+            "product_name": lowest_margin["product_name"],
+            "product_id": lowest_margin["product_id"],
+            "margin": margin_val,
+            "is_low": margin_val < BRIEFING_MARGIN_THRESHOLD,
+        },
+        "category_data": pd.DataFrame(category_data),
+    }

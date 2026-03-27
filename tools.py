@@ -4,10 +4,9 @@ Implements 6 tools callable by the LLM, plus their OpenAI-format schemas.
 """
 
 import json
-from openai import OpenAI
 from data_loader import get_products_df, get_reviews_df
 from config import (
-    OPENAI_API_KEY, API_BASE_URL, MODEL_NAME,
+    get_llm_client, MODEL_NAME,
     SUMMARY_TEMPERATURE, SUMMARY_MAX_TOKENS,
     STOCKOUT_CRITICAL_DAYS, STOCKOUT_LOW_DAYS,
     LOW_MARGIN_THRESHOLD, LLM_TOP_P,
@@ -15,14 +14,6 @@ from config import (
 
 # Cache for review insights to avoid redundant LLM calls
 _review_cache: dict = {}
-
-
-def _get_llm_client():
-    """Create an OpenAI client for review summarization."""
-    kwargs = {"api_key": OPENAI_API_KEY}
-    if API_BASE_URL:
-        kwargs["base_url"] = API_BASE_URL
-    return OpenAI(**kwargs)
 
 
 # =============================================================================
@@ -230,7 +221,7 @@ def get_review_insights(product_id: str) -> dict:
     avg_rating = round(product_reviews["rating"].mean(), 1)
 
     # Call LLM for summarization
-    client = _get_llm_client()
+    client = get_llm_client()
     prompt = f"""Analyze these reviews for "{row['product_name']}". Reply with ONLY a JSON object, no markdown, no explanation.
 
 Reviews:

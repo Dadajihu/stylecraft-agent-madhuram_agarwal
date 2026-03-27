@@ -32,7 +32,7 @@ LLM_MAX_TOKENS = 1024
 
 # For review summarization, we use even lower temperature for factual accuracy
 SUMMARY_TEMPERATURE = 0.2
-SUMMARY_MAX_TOKENS = 512
+SUMMARY_MAX_TOKENS = 1024  # Generous limit to avoid truncated JSON from verbose models
 
 # --- Data File Paths ---
 PRODUCTS_CSV = "Set-B retailmind_products.csv"
@@ -44,3 +44,12 @@ STOCKOUT_CRITICAL_DAYS = 7    # Critical if less than 7 days of stock
 STOCKOUT_LOW_DAYS = 14        # Low if between 7-14 days of stock
 LOW_MARGIN_THRESHOLD = 20     # Flag products with margin below 20%
 BRIEFING_MARGIN_THRESHOLD = 25  # Daily briefing flags margins below 25%
+
+
+def get_llm_client():
+    """Create and return an OpenAI-compatible client (works with OpenAI, Gemini, Groq)."""
+    from openai import OpenAI
+    kwargs = {"api_key": OPENAI_API_KEY}
+    if API_BASE_URL:
+        kwargs["base_url"] = API_BASE_URL
+    return OpenAI(**kwargs)
